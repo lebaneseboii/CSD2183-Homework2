@@ -1,3 +1,14 @@
+/******************************************************************************/
+/*!
+\file           simplify.cpp
+\project        2
+\author(s)      [Lebon] 50% [Ho Jun] 50%
+\brief          Implements the Area-Preserving Segment Collapse (APSC) algorithm
+                for polygon simplification. Utilizes a lazy priority queue and
+                spatial hashing to efficiently reduce vertex count while
+perfectly preserving area and topological validity.
+*/
+/******************************************************************************/
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
