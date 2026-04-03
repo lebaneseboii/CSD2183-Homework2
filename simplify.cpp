@@ -9,6 +9,17 @@
 perfectly preserving area and topological validity.
 */
 /******************************************************************************/
+/******************************************************************************/
+/*!
+\file           simplify.cpp
+\project        2
+\author(s)      [Lebon] 50% [Ho Jun] 50%
+\brief          Implements the Area-Preserving Segment Collapse (APSC) algorithm
+                for polygon simplification. Utilizes a lazy priority queue and
+                spatial hashing to efficiently reduce vertex count while
+                perfectly preserving area and topological validity.
+*/
+/******************************************************************************/
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +32,7 @@ perfectly preserving area and topological validity.
 #include <optional>
 #include <queue>
 #include <sstream>
+#include <string>
 #include <vector>
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -79,6 +91,10 @@ std::vector<int> ring_size;
 
 inline double cross2(const Point &a, const Point &b, const Point &c) {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+inline double triArea(const Point &a, const Point &b, const Point &c) {
+  return 0.5 * std::abs(cross2(a, b, c));
 }
 
 inline int sideOf(const Point &p, const Point &a, const Point &b) {
@@ -149,10 +165,9 @@ bool pointInTriangle(const Point &p, const Point &a, const Point &b,
 // Steiner Point Computation (Kronenfeld et al. 2020)
 // ─────────────────────────────────────────────────────────────────────────────
 
-bool computeSteinerPoint(const Point &A, const Point &B, const Point &C,
-                         const Point &D, Point &outE) {
+bool computeSteinerLine(const Point &A, const Point &B, const Point &C,
+                        const Point &D, Point &el0, Point &el1) {
   if (std::hypot(D.x - A.x, D.y - A.y) < EPS) {
-    outE = A;
     return true;
   }
   double a = D.y - A.y;
@@ -163,11 +178,9 @@ bool computeSteinerPoint(const Point &A, const Point &B, const Point &C,
   double dA = std::abs(a * A.x + b * A.y + c_line);
   double dD = std::abs(a * D.x + b * D.y + c_line);
   if (dA < EPS && dD < EPS) {
-    outE = {(A.x + D.x) * 0.5, (A.y + D.y) * 0.5};
     return true;
   }
 
-  Point el0, el1;
   if (std::abs(b) > 1e-13) {
     el0 = {0.0, -c_line / b};
     el1 = {1.0, -(a + c_line) / b};
@@ -177,24 +190,70 @@ bool computeSteinerPoint(const Point &A, const Point &B, const Point &C,
   } else {
     return false;
   }
+  return true;
+}
 
-  int sideB_AD = sideOf(B, A, D);
-  int sideC_AD = sideOf(C, A, D);
-  bool useAB;
-  if (sideB_AD == sideC_AD) {
-    useAB = (distToLine(B, A, D) >= distToLine(C, A, D) - EPS);
-  } else {
-    int sideEline_AD = sideOf(el0, A, D);
-    if (sideEline_AD == 0)
-      sideEline_AD = sideOf(el1, A, D);
-    useAB = (sideEline_AD == sideB_AD);
+bool appendUniquePoint(std::vector<Point> &pts, const Point &p) {
+  if (!std::isfinite(p.x) || !std::isfinite(p.y))
+    return false;
+  for (const Point &q : pts) {
+    if (std::abs(p.x - q.x) <= 1e-10 && std::abs(p.y - q.y) <= 1e-10)
+      return false;
+  }
+  pts.push_back(p);
+  return true;
+}
+
+std::vector<Point> computeSteinerPoints(const Point &A, const Point &B,
+                                        const Point &C, const Point &D) {
+  std::vector<Point> pts;
+  if (std::hypot(D.x - A.x, D.y - A.y) < EPS) {
+    pts.push_back(A);
+    return pts;
   }
 
-  auto optE = lineLineIntersect(useAB ? A : C, useAB ? B : D, el0, el1);
-  if (!optE)
-    return false;
-  outE = *optE;
-  return true;
+  Point el0, el1;
+  if (!computeSteinerLine(A, B, C, D, el0, el1))
+    return pts;
+
+  double a = D.y - A.y;
+  double b = A.x - D.x;
+  double c_line =
+      -B.y * A.x + (A.y - C.y) * B.x + (B.y - D.y) * C.x + C.y * D.x;
+  double dA = std::abs(a * A.x + b * A.y + c_line);
+  double dD = std::abs(a * D.x + b * D.y + c_line);
+  if (dA < EPS && dD < EPS) {
+    pts.push_back({(A.x + D.x) * 0.5, (A.y + D.y) * 0.5});
+    return pts;
+  }
+
+  auto optAB = lineLineIntersect(A, B, el0, el1);
+  if (optAB)
+    appendUniquePoint(pts, *optAB);
+
+  auto optCD = lineLineIntersect(C, D, el0, el1);
+  if (optCD)
+    appendUniquePoint(pts, *optCD);
+
+  if (pts.empty()) {
+    int sideB_AD = sideOf(B, A, D);
+    int sideC_AD = sideOf(C, A, D);
+    bool useAB;
+    if (sideB_AD == sideC_AD) {
+      useAB = (distToLine(B, A, D) >= distToLine(C, A, D) - EPS);
+    } else {
+      int sideEline_AD = sideOf(el0, A, D);
+      if (sideEline_AD == 0)
+        sideEline_AD = sideOf(el1, A, D);
+      useAB = (sideEline_AD == sideB_AD);
+    }
+
+    auto optE = lineLineIntersect(useAB ? A : C, useAB ? B : D, el0, el1);
+    if (optE)
+      appendUniquePoint(pts, *optE);
+  }
+
+  return pts;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +287,8 @@ struct Candidate {
   int A, B, C, D;             // node indices of the 4-vertex window
   Point E;                    // computed Steiner point
   double disp;                // areal displacement cost
+  double local_area;          // local effective area proxy
+  double score;               // selection score used by the queue / lookahead
   int verA, verB, verC, verD; // version stamps at creation time
 
   bool isStale() const {
@@ -240,8 +301,12 @@ struct Candidate {
   // Min-heap: lower displacement is better (use greater-than for
   // std::priority_queue)
   bool operator>(const Candidate &o) const {
+    if (std::abs(score - o.score) > 1e-10)
+      return score > o.score;
     if (std::abs(disp - o.disp) > 1e-12)
       return disp > o.disp;
+    if (std::abs(local_area - o.local_area) > 1e-12)
+      return local_area > o.local_area;
     // Tie-breaking: prefer specific ring/vertex ordering for determinism
     if (nodes[B].ring_id != nodes[o.B].ring_id)
       return nodes[B].ring_id > nodes[o.B].ring_id;
@@ -442,6 +507,20 @@ bool collapseIsTopologicallySafe(int A_id, int B_id, int C_id, int D_id,
 // Candidate Creation
 // ─────────────────────────────────────────────────────────────────────────────
 
+double localEffectiveArea(const Point &A, const Point &B, const Point &C,
+                          const Point &D) {
+  return triArea(A, B, C) + triArea(B, C, D);
+}
+
+double candidateScore(double disp, double local_area) {
+  static const double areaWeight = []() {
+    if (const char *env = std::getenv("SIMPLIFY_AREA_WEIGHT"))
+      return std::stod(env);
+    return 0.03;
+  }();
+  return disp + areaWeight * local_area;
+}
+
 void pushCandidate(int A_id, int B_id, int C_id, int D_id, PQ &pq) {
   if (A_id == C_id || B_id == D_id)
     return;
@@ -449,30 +528,33 @@ void pushCandidate(int A_id, int B_id, int C_id, int D_id, PQ &pq) {
       !nodes[D_id].alive)
     return;
 
-  Point E;
-  if (!computeSteinerPoint(nodes[A_id].pt, nodes[B_id].pt, nodes[C_id].pt,
-                           nodes[D_id].pt, E))
-    return;
-  if (!std::isfinite(E.x) || !std::isfinite(E.y))
-    return;
+  const Point &A = nodes[A_id].pt;
+  const Point &B = nodes[B_id].pt;
+  const Point &C = nodes[C_id].pt;
+  const Point &D = nodes[D_id].pt;
+  double local_area = localEffectiveArea(A, B, C, D);
 
-  double disp = arealDisplacement(nodes[A_id].pt, nodes[B_id].pt,
-                                  nodes[C_id].pt, nodes[D_id].pt, E);
-  if (!std::isfinite(disp))
-    return;
+  std::vector<Point> steiner_pts = computeSteinerPoints(A, B, C, D);
+  for (const Point &E : steiner_pts) {
+    double disp = arealDisplacement(A, B, C, D, E);
+    if (!std::isfinite(disp))
+      continue;
 
-  Candidate c;
-  c.A = A_id;
-  c.B = B_id;
-  c.C = C_id;
-  c.D = D_id;
-  c.E = E;
-  c.disp = disp;
-  c.verA = nodes[A_id].version;
-  c.verB = nodes[B_id].version;
-  c.verC = nodes[C_id].version;
-  c.verD = nodes[D_id].version;
-  pq.push(c);
+    Candidate c;
+    c.A = A_id;
+    c.B = B_id;
+    c.C = C_id;
+    c.D = D_id;
+    c.E = E;
+    c.disp = disp;
+    c.local_area = local_area;
+    c.score = candidateScore(disp, local_area);
+    c.verA = nodes[A_id].version;
+    c.verB = nodes[B_id].version;
+    c.verC = nodes[C_id].version;
+    c.verD = nodes[D_id].version;
+    pq.push(c);
+  }
 }
 
 // Push candidates in the neighborhood of a vertex (spanning ~8 windows)
@@ -494,44 +576,7 @@ void pushNeighborCandidates(int E_id, PQ &pq, int rSize) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Lookahead: estimate best future displacement after a hypothetical collapse
-// ─────────────────────────────────────────────────────────────────────────────
 
-static double localCandidateDisp(const Point &A, const Point &B, const Point &C,
-                                 const Point &D) {
-  Point E;
-  if (!computeSteinerPoint(A, B, C, D, E) || !std::isfinite(E.x) ||
-      !std::isfinite(E.y))
-    return std::numeric_limits<double>::infinity();
-  double d = arealDisplacement(A, B, C, D, E);
-  if (!std::isfinite(d))
-    return std::numeric_limits<double>::infinity();
-  return d;
-}
-
-static double estimateNextDispAfterCollapse(const Candidate &cand) {
-  int P_id = nodes[cand.A].prev;
-  int N_id = nodes[cand.D].next;
-  const Point &A = nodes[cand.A].pt;
-  const Point &D = nodes[cand.D].pt;
-  const Point &E = cand.E;
-
-  double best = std::numeric_limits<double>::infinity();
-
-  // Check left window: P -> A -> E -> D
-  if (P_id != cand.B && P_id != cand.C && P_id != cand.D) {
-    best = std::min(best, localCandidateDisp(nodes[P_id].pt, A, E, D));
-  }
-  // Check right window: A -> E -> D -> N
-  if (N_id != cand.A && N_id != cand.B && N_id != cand.C) {
-    best = std::min(best, localCandidateDisp(A, E, D, nodes[N_id].pt));
-  }
-
-  if (!std::isfinite(best))
-    return 0.0;
-  return best;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Area computation
@@ -550,6 +595,37 @@ double signedArea(int ring_id) {
     curr = nxt;
   } while (curr != start);
   return area * 0.5;
+}
+
+static double localCandidateDisp(const Point &A, const Point &B, const Point &C,
+                                 const Point &D) {
+  std::vector<Point> steiner_pts = computeSteinerPoints(A, B, C, D);
+  double best = std::numeric_limits<double>::infinity();
+  for (const Point &E : steiner_pts) {
+    double d = arealDisplacement(A, B, C, D, E);
+    if (std::isfinite(d))
+      best = std::min(best, d);
+  }
+  return best;
+}
+
+static double estimateNextDispAfterCollapse(const Candidate &cand) {
+  int P_id = nodes[cand.A].prev;
+  int N_id = nodes[cand.D].next;
+  const Point &A = nodes[cand.A].pt;
+  const Point &D = nodes[cand.D].pt;
+  const Point &E = cand.E;
+
+  double best = std::numeric_limits<double>::infinity();
+  if (P_id != cand.B && P_id != cand.C && P_id != cand.D) {
+    best = std::min(best, localCandidateDisp(nodes[P_id].pt, A, E, D));
+  }
+  if (N_id != cand.A && N_id != cand.B && N_id != cand.C) {
+    best = std::min(best, localCandidateDisp(A, E, D, nodes[N_id].pt));
+  }
+  if (!std::isfinite(best))
+    return 0.0;
+  return best;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -634,23 +710,22 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < (int)ring_head.size(); ++i)
     area_in += signedArea(i);
 
-  // ── Read lookahead weight from environment ──
-  double lookaheadW = 0.35;
-  if (const char *env_w = std::getenv("SIMPLIFY_LOOKAHEAD_W"))
-    lookaheadW = std::stod(env_w);
-
-  int lookaheadK = 0;
-  if (const char *env_k = std::getenv("SIMPLIFY_LOOKAHEAD_K")) {
-    lookaheadK = std::stoi(env_k);
-    if (lookaheadK < 0)
-      lookaheadK = 0;
-    if (lookaheadK > 32)
-      lookaheadK = 32;
-  }
-  int selectionK = std::max(1, lookaheadK);
-  int scanBudget = std::max(selectionK, selectionK * 4);
-
   double totalDisp = 0.0;
+  const int selectionK = []() {
+    if (const char *env = std::getenv("SIMPLIFY_LOOKAHEAD_K"))
+      return std::max(1, std::stoi(env));
+    return 6;
+  }();
+  const int scanBudget = []() {
+    if (const char *env = std::getenv("SIMPLIFY_SCAN_BUDGET"))
+      return std::max(1, std::stoi(env));
+    return 24;
+  }();
+  const double lookaheadW = []() {
+    if (const char *env = std::getenv("SIMPLIFY_LOOKAHEAD_W"))
+      return std::stod(env);
+    return 0.20;
+  }();
 
   if (totalVerts > target) {
     // ── Build spatial index ──
@@ -687,10 +762,9 @@ int main(int argc, char *argv[]) {
     long long collapseCount = 0;
 
     while (totalVerts > target && !pq.empty()) {
-      // With lookahead: gather multiple feasible candidates and pick the best
       std::vector<Candidate> feasible;
+      feasible.reserve(selectionK);
       int scanned = 0;
-
       while (!pq.empty() && scanned < scanBudget &&
              (int)feasible.size() < selectionK) {
         Candidate cand = pq.top();
@@ -707,32 +781,28 @@ int main(int argc, char *argv[]) {
         if (!collapseIsTopologicallySafe(cand.A, cand.B, cand.C, cand.D,
                                          cand.E))
           continue;
-
         feasible.push_back(cand);
       }
-
       if (feasible.empty())
         continue;
 
-      // Pick the best candidate (with lookahead scoring if K > 1)
       int pick = 0;
-      if (selectionK > 1 && feasible.size() > 1) {
-        double bestScore = std::numeric_limits<double>::infinity();
-        for (int i = 0; i < (int)feasible.size(); ++i) {
-          const Candidate &c = feasible[i];
-          double score = c.disp + lookaheadW * estimateNextDispAfterCollapse(c);
-          if (score + 1e-12 < bestScore) {
-            bestScore = score;
-            pick = i;
-          } else if (std::abs(score - bestScore) <= 1e-12 &&
-                     c.disp + 1e-12 < feasible[pick].disp) {
-            pick = i;
-          }
+      double bestCombined = std::numeric_limits<double>::infinity();
+      for (int i = 0; i < (int)feasible.size(); ++i) {
+        const Candidate &cand = feasible[i];
+        double nextDisp = estimateNextDispAfterCollapse(cand);
+        double combined =
+            candidateScore(cand.disp, cand.local_area) + lookaheadW * nextDisp;
+        if (combined + 1e-12 < bestCombined) {
+          bestCombined = combined;
+          pick = i;
+        } else if (std::abs(combined - bestCombined) <= 1e-12 &&
+                   feasible[i] > feasible[pick]) {
+          pick = i;
         }
       }
 
       Candidate cand = feasible[pick];
-      // Push back non-selected feasible candidates
       for (int i = 0; i < (int)feasible.size(); ++i) {
         if (i != pick)
           pq.push(feasible[i]);
@@ -743,10 +813,6 @@ int main(int argc, char *argv[]) {
       int C_id = cand.C;
       int D_id = cand.D;
       Point E = cand.E;
-
-      // Double-check staleness after potential re-ordering
-      if (cand.isStale() || ring_size[nodes[B_id].ring_id] <= 4)
-        continue;
 
       // ── Apply the collapse ──
       Point old_B = nodes[B_id].pt;
