@@ -277,7 +277,13 @@ Candidate buildCandidate(const Polygon& polygon,
     const Point replacement = updatedRing[adjustedIndex] + normal * scale;
     updatedRing[adjustedIndex] = replacement;
 
-    if (!nearlyEqual(signedArea2(updatedRing), signedArea2(v), 1e-6)) {
+    // Reject if replacement moves too far (prevents crazy distortion)
+    const double maxMove = 500.0;  // tweak if needed
+    if (std::sqrt(norm2(replacement - updatedRing[adjustedIndex])) > maxMove) {
+        return best;
+    }
+
+    if (!nearlyEqual(signedArea2(updatedRing), signedArea2(v), 1e-3)) {
         return best;
     }
     if (!topologyPreserved(polygon, constraints, ringIndex, updatedRing)) {
@@ -289,8 +295,8 @@ Candidate buildCandidate(const Polygon& polygon,
     best.vertexIndex = vertexIndex;
     best.moveNext = moveNext;
     best.replacement = replacement;
-    const Point adjustedOriginal = moveNext ? v[(vertexIndex + 1) % n] : v[(vertexIndex + n - 1) % n];
-    best.displacement = std::abs(0.5 * missingArea2) + std::sqrt(norm2(replacement - adjustedOriginal));
+    //const Point adjustedOriginal = moveNext ? v[(vertexIndex + 1) % n] : v[(vertexIndex + n - 1) % n];
+    best.displacement = std::abs(0.5 * missingArea2);
     return best;
 }
 
@@ -358,12 +364,15 @@ double simplifyPolygon(Polygon& polygon, std::size_t targetVertices) {
     const TopologyConstraints constraints = buildTopologyConstraints(polygon);
     double totalDisplacement = 0.0;
     while (totalVertices(polygon) > targetVertices) {
+        //std::cout << "Vertices left: " << totalVertices(polygon) << std::endl;
         Candidate best;
         best.displacement = std::numeric_limits<double>::infinity();
 
         for (std::size_t ringIndex = 0; ringIndex < polygon.rings.size(); ++ringIndex) {
             const auto& ring = polygon.rings[ringIndex].vertices;
-            if (ring.size() <= 3) {
+            const std::size_t MIN_RING_SIZE = 6;  // you can try 6–8
+
+            if (ring.size() <= MIN_RING_SIZE) {
                 continue;
             }
             for (std::size_t vertexIndex = 0; vertexIndex < ring.size(); ++vertexIndex) {
