@@ -273,15 +273,18 @@ Candidate buildCandidate(const Polygon& polygon,
         return best;
     }
 
-    const double scale = missingArea2 / denom;
-    const Point replacement = updatedRing[adjustedIndex] + normal * scale;
-    updatedRing[adjustedIndex] = replacement;
+    Point originalPoint = updatedRing[adjustedIndex];
 
-    // Reject if replacement moves too far (prevents crazy distortion)
-    const double maxMove = 500.0;  // tweak if needed
-    if (std::sqrt(norm2(replacement - updatedRing[adjustedIndex])) > maxMove) {
+    const double scale = missingArea2 / denom;
+    const Point replacement = originalPoint + normal * scale;
+
+    // Reject if replacement moves too far
+    const double maxMove = 300.0;
+    if (std::sqrt(norm2(replacement - originalPoint)) > maxMove) {
         return best;
     }
+
+    updatedRing[adjustedIndex] = replacement;
 
     if (!nearlyEqual(signedArea2(updatedRing), signedArea2(v), 1e-3)) {
         return best;
@@ -296,7 +299,12 @@ Candidate buildCandidate(const Polygon& polygon,
     best.moveNext = moveNext;
     best.replacement = replacement;
     //const Point adjustedOriginal = moveNext ? v[(vertexIndex + 1) % n] : v[(vertexIndex + n - 1) % n];
-    best.displacement = std::abs(0.5 * missingArea2);
+    double areaCost = std::abs(0.5 * missingArea2);
+
+    // small penalty for large movement (helps shape stability)
+    double moveCost = std::sqrt(norm2(replacement - originalPoint));
+
+    best.displacement = areaCost + 0.01 * moveCost;
     return best;
 }
 
@@ -366,11 +374,11 @@ double simplifyPolygon(Polygon& polygon, std::size_t targetVertices) {
     while (totalVertices(polygon) > targetVertices) {
         //std::cout << "Vertices left: " << totalVertices(polygon) << std::endl;
         Candidate best;
-        best.displacement = std::numeric_limits<double>::infinity();
+        double bestCost = std::numeric_limits<double>::infinity();
 
         for (std::size_t ringIndex = 0; ringIndex < polygon.rings.size(); ++ringIndex) {
             const auto& ring = polygon.rings[ringIndex].vertices;
-            const std::size_t MIN_RING_SIZE = 6;  // you can try 6–8
+            const std::size_t MIN_RING_SIZE = (ringIndex == 0) ? 8 : 4;
 
             if (ring.size() <= MIN_RING_SIZE) {
                 continue;
@@ -378,8 +386,18 @@ double simplifyPolygon(Polygon& polygon, std::size_t targetVertices) {
             for (std::size_t vertexIndex = 0; vertexIndex < ring.size(); ++vertexIndex) {
                 for (bool moveNext : {true, false}) {
                     Candidate candidate = buildCandidate(polygon, constraints, ringIndex, vertexIndex, moveNext);
-                    if (candidate.valid && candidate.displacement < best.displacement) {
+                    if (!candidate.valid) continue;
+
+                    double adjustedCost = candidate.displacement;
+
+                    // discourage collapsing outer ring slightly
+                    if (candidate.ringIndex == 0) {
+                        adjustedCost *= 1.2;
+                    }
+
+                    if (adjustedCost < bestCost) {
                         best = candidate;
+                        bestCost = adjustedCost;
                     }
                 }
             }
